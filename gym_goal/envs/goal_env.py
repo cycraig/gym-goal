@@ -1,17 +1,16 @@
 import numpy as np
 import math
-#from numpy.linalg import norm
 import gym
 import pygame
-from gym import error, spaces, utils
+from gym import spaces
 from gym.utils import seeding
 from gym_goal.spaces import Compound
 import sys
-from numba import jit
 from .config import PLAYER_CONFIG, BALL_CONFIG, GOAL_AREA_LENGTH, GOAL_AREA_WIDTH, GOAL_WIDTH, GOAL_DEPTH, KICKABLE, \
     INERTIA_MOMENT, MINPOWER, MAXPOWER, PITCH_LENGTH, PITCH_WIDTH, CATCHABLE, CATCH_PROBABILITY, SHIFT_VECTOR, \
     SCALE_VECTOR
-from .util import bound, bound_vector, angle_position, angle_between, angle_difference, angle_close, norm_angle
+from .util import bound, bound_vector, angle_position, angle_between, angle_difference, angle_close, norm_angle, \
+    vector_to_tuple
 
 # actions
 KICK = "kick"
@@ -44,6 +43,8 @@ PARAMETERS_MAX = [
 
 
 def norm(vec2d):
+    # from numpy.linalg import norm
+    # faster to use custom norm because we know the vectors are always 2D
     assert len(vec2d) == 2
     return math.sqrt(vec2d[0]*vec2d[0] + vec2d[1]*vec2d[1])
 
@@ -51,6 +52,8 @@ def norm(vec2d):
 class GoalEnv(gym.Env):
     # metadata = {'render.modes': ['human', 'rgb_array']}
     metadata = {'render.modes': ['human']}  # cannot use rgb_array at the moment due to frame skip between actions
+    _VISUALISER_SCALE_FACTOR = 20
+    _VISUALISER_DELAY = 120  # fps
 
     def __init__(self):
         """ The entities are set up and added to a space. """
@@ -75,6 +78,8 @@ class GoalEnv(gym.Env):
         self._update_entity_seeds()
 
         self.states = []
+        self.render_states = []
+        self.window = None
 
         self.time = 0
         self.max_time = 100
@@ -97,7 +102,7 @@ class GoalEnv(gym.Env):
 
         Parameters
         ----------
-        action :
+        action (ndarray) :
 
         Returns
         -------
@@ -153,6 +158,7 @@ class GoalEnv(gym.Env):
             self.goalie.position.copy(),
             self.goalie.orientation,
             self.ball.position.copy()])
+        self.render_states.append(self.states[-1])
         self._perform_action(act, param, self.player)
         self.goalie.move(self.ball, self.player)
         for entity in self.entities:
@@ -161,7 +167,7 @@ class GoalEnv(gym.Env):
         return self._terminal_check()
 
     def reset(self):
-        # TODO: code reset for each entity to avoid creating new objects
+        # TODO: implement reset for each entity to avoid creating new objects and reduce duplicate code
         # create entities (player, ball, goalie)
         initial_player = np.array((0, self.np_random.uniform(-PITCH_WIDTH / 2, PITCH_WIDTH / 2)))
         angle = angle_between(initial_player, np.array((PITCH_LENGTH / 2, 0)))
@@ -178,13 +184,11 @@ class GoalEnv(gym.Env):
         self._update_entity_seeds()
 
         self.states = []
+        self.render_states = []
 
         self.time = 0
 
         return self.get_state(), 0
-
-    def render(self, mode='human'):
-        raise NotImplementedError
 
     def seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
@@ -292,6 +296,141 @@ class GoalEnv(gym.Env):
         """ Unscale state variables. """
         state = (scaled_state * SCALE_VECTOR) - SHIFT_VECTOR
         return state
+
+    def __draw_internal_state(self, internal_state, fade=False):
+        """ Draw the field and players. """
+
+        player_position = internal_state[0]
+        player_orientation = internal_state[1]
+        goalie_position = internal_state[2]
+        goalie_orientation = internal_state[3]
+        ball_position = internal_state[4]
+        ball_size = BALL_CONFIG['SIZE']
+
+        self.window.blit(self.__background, (0, 0))
+
+        # Draw goal and penalty areas
+        length = self.__visualiser_scale(PITCH_LENGTH / 2)
+        width = self.__visualiser_scale(PITCH_WIDTH)
+
+        self.__draw_vertical(length, 0, width)
+        self.__draw_box(GOAL_AREA_WIDTH, GOAL_AREA_LENGTH)
+        # self.draw_box(PENALTY_AREA_WIDTH, PENALTY_AREA_LENGTH)
+
+        depth = length + self.__visualiser_scale(GOAL_DEPTH)
+        self.__draw_horizontal(width / 2 - self.__visualiser_scale(GOAL_WIDTH / 2), length, depth)
+        self.__draw_horizontal(width / 2 + self.__visualiser_scale(GOAL_WIDTH / 2), length, depth)
+
+        # self.draw_radius(vector(0, 0), CENTRE_CIRCLE_RADIUS)
+        # Draw Players
+        self.__draw_player(player_position, player_orientation, self.__white)
+        if not fade:
+            self.__draw_radius(player_position, KICKABLE)
+        self.__draw_player(goalie_position, goalie_orientation, self.__red)
+        if not fade:
+            self.__draw_radius(goalie_position, CATCHABLE)
+        # Draw ball
+        self.__draw_entity(ball_position, ball_size, self.__black)
+        pygame.display.update()
+
+    def __visualiser_scale(self, value):
+        ''' Scale up a value. '''
+        return int(self._VISUALISER_SCALE_FACTOR * value)
+
+    def __upscale(self, position):
+        ''' Maps a simulator position to a field position. '''
+        pos1 = self.__visualiser_scale(position[0])
+        pos2 = self.__visualiser_scale(position[1] + PITCH_WIDTH / 2)
+        return np.array([pos1, pos2])
+
+    def __draw_box(self, area_width, area_length):
+        """ Draw a box at the goal line. """
+        lower_corner = self.__visualiser_scale(PITCH_WIDTH / 2 - area_width / 2)
+        upper_corner = lower_corner + self.__visualiser_scale(area_width)
+        line = self.__visualiser_scale(PITCH_LENGTH / 2 - area_length)
+        self.__draw_vertical(line, lower_corner, upper_corner)
+        self.__draw_horizontal(lower_corner, line, self.__visualiser_scale(PITCH_LENGTH / 2))
+        self.__draw_horizontal(upper_corner, line, self.__visualiser_scale(PITCH_LENGTH / 2))
+
+    def __draw_player(self, position, orientation, colour):
+        ''' Draw a player with given position and orientation. '''
+        size = PLAYER_CONFIG['SIZE']
+        self.__draw_entity(position, size, colour)
+        radius_end = size * angle_position(orientation)
+        pos = vector_to_tuple(self.__upscale(position))
+        end = vector_to_tuple(self.__upscale(position + radius_end))
+        pygame.draw.line(self.window, self.__black, pos, end)
+
+    def __draw_radius(self, position, radius):
+        """ Draw an empty circle. """
+        pos = vector_to_tuple(self.__upscale(position))
+        radius = self.__visualiser_scale(radius)
+        pygame.draw.circle(self.window, self.__white, pos, radius, 1)
+
+    def __draw_entity(self, position, size, colour):
+        """ Draws an entity as a ball. """
+        pos = vector_to_tuple(self.__upscale(position))
+        radius = self.__visualiser_scale(size)
+        pygame.draw.circle(self.window, colour, pos, radius)
+
+    def __draw_horizontal(self, yline, xline1, xline2):
+        """ Draw a horizontal line. """
+        pos1 = (xline1, yline)
+        pos2 = (xline2, yline)
+        pygame.draw.line(self.window, self.__white, pos1, pos2)
+
+    def __draw_vertical(self, xline, yline1, yline2):
+        """ Draw a vertical line. """
+        pos1 = (xline, yline1)
+        pos2 = (xline, yline2)
+        pygame.draw.line(self.window, self.__white, pos1, pos2)
+
+    def __draw_render_states(self):
+        """
+        Draw the internal states from the last action.
+        """
+        length = len(self.render_states)
+        for i in range(0, length):
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.display.quit()
+                    pygame.quit()
+                    sys.exit()
+            self.__draw_internal_state(self.render_states[i])
+            self.__clock.tick(self._VISUALISER_DELAY)
+        self.render_states = []  # clear states for next render
+
+    def render(self, mode='human', close=False):
+        if close:
+            pygame.display.quit()
+            pygame.quit()
+            self.window = None
+            return
+
+        # initialise visualiser
+        if self.window is None:
+            pygame.init()
+            length = self.__visualiser_scale(PITCH_LENGTH / 2 + GOAL_DEPTH)
+            width = self.__visualiser_scale(PITCH_WIDTH)
+            self.window = pygame.display.set_mode((length, width))
+            self.__clock = pygame.time.Clock()
+            size = (length, width)
+            self.__background = pygame.Surface(size)
+            self.__white = pygame.Color(255, 255, 255, 0)
+            self.__black = pygame.Color(0, 0, 0, 0)
+            self.__red = pygame.Color(255, 0, 0, 0)
+            self.__background.fill(pygame.Color(0, 125, 0, 0))
+
+        self.__draw_render_states()
+
+        #img = self._get_image()
+        #if mode == 'rgb_array':
+        #    return img
+        # elif mode == 'human':
+        #    from gym.envs.classic_control import rendering
+        #    if self.viewer is None:
+        #        self.viewer = rendering.SimpleImageViewer(SCREEN_WIDTH, SCREEN_HEIGHT)
+        #    self.viewer.imshow(img)
 
 
 class Entity:
@@ -510,7 +649,7 @@ class Goalie(Player):
         """ This moves the goalie. """
         ball_end = ball.position + ball.velocity / (1 - ball.decay)
         diff = ball_end - ball.position
-        grad = diff[1] / diff[0]
+        grad = diff[1] / diff[0] if diff[0] != 0. else 0  # avoid division by 0
         yint = ball.position[1] - grad * ball.position[0]
         goal_y = grad * PITCH_LENGTH / 2 + yint
         if ball_end[0] > PITCH_LENGTH / 2 and -GOAL_WIDTH / 2 - CATCHABLE <= goal_y <= GOAL_WIDTH / 2 + CATCHABLE \

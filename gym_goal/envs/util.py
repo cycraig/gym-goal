@@ -52,3 +52,8 @@ def vector(xvalue, yvalue):
     """ Returns a 2D numpy vector. """
     return np.array([float(xvalue), float(yvalue)])
 
+
+def vector_to_tuple(vect):
+    """ Converts a numpy array to a tuple. """
+    return (vect[0], vect[1])
+    #return tuple(map(tuple, vect))
