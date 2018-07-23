@@ -1,3 +1,4 @@
+import math
 import numpy as np
 
 
@@ -40,7 +41,8 @@ def angle_close(angle1, angle2):
 def angle_between(pos1, pos2):
     """ Computes the angle between two positions. """
     diff = pos2 - pos1
-    return np.arctan2(diff[1], diff[0])
+    # return np.arctan2(diff[1], diff[0])
+    return math.atan2(diff[1], diff[0])  # faster than numpy
 
 
 def angle_position(theta):
@@ -50,10 +52,12 @@ def angle_position(theta):
 
 def vector(xvalue, yvalue):
     """ Returns a 2D numpy vector. """
-    return np.array([float(xvalue), float(yvalue)])
+    # return np.array([float(xvalue), float(yvalue)])
+    return np.array([xvalue, yvalue], dtype=np.float64)
 
 
 def vector_to_tuple(vect):
     """ Converts a numpy array to a tuple. """
+    assert len(vect) == 2
     return (vect[0], vect[1])
-    #return tuple(map(tuple, vect))
+    # return tuple(map(tuple, vect))

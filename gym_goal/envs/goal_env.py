@@ -2,13 +2,13 @@ import numpy as np
 import math
 import gym
 import pygame
-from gym import spaces
+from gym import spaces, error
 from gym.utils import seeding
 from gym_goal.spaces import Compound
 import sys
 from .config import PLAYER_CONFIG, BALL_CONFIG, GOAL_AREA_LENGTH, GOAL_AREA_WIDTH, GOAL_WIDTH, GOAL_DEPTH, KICKABLE, \
     INERTIA_MOMENT, MINPOWER, MAXPOWER, PITCH_LENGTH, PITCH_WIDTH, CATCHABLE, CATCH_PROBABILITY, SHIFT_VECTOR, \
-    SCALE_VECTOR
+    SCALE_VECTOR, LOW_VECTOR, HIGH_VECTOR
 from .util import bound, bound_vector, angle_position, angle_between, angle_difference, angle_close, norm_angle, \
     vector_to_tuple
 
@@ -31,16 +31,17 @@ ACTION_LOOKUP = {
 # field bounds seem to be 0, PITCH_LENGTH / 2, -PITCH_WIDTH / 2, PITCH_WIDTH / 2
 PARAMETERS_MIN = [
     np.array([0, -PITCH_WIDTH / 2]),
+    # np.array([-PITCH_LENGTH, -PITCH_WIDTH]), # just trying larger range...
     np.array([-GOAL_WIDTH / 2]),
     np.array([-GOAL_WIDTH / 2]),
 ]
 
 PARAMETERS_MAX = [
     np.array([PITCH_LENGTH, PITCH_WIDTH / 2]),
+    # np.array([PITCH_LENGTH, PITCH_WIDTH]),  # just trying larger range...
     np.array([GOAL_WIDTH / 2]),
     np.array([GOAL_WIDTH / 2]),
 ]
-
 
 def norm(vec2d):
     # from numpy.linalg import norm
@@ -60,22 +61,10 @@ class GoalEnv(gym.Env):
 
         self.np_random = None
         self.entities = []
-        self.seed()
 
-        # create entities (player, ball, goalie)
-        initial_player = np.array((0, self.np_random.uniform(-PITCH_WIDTH / 2, PITCH_WIDTH / 2)))
-        angle = angle_between(initial_player, np.array((PITCH_LENGTH / 2, 0)))
-        self.player = Player(initial_player, angle)
-
-        initial_ball = initial_player + KICKABLE * angle_position(angle)
-        self.ball = Ball(initial_ball)
-
-        initial_goalie = self._keeper_target(initial_ball)
-        angle2 = angle_between(initial_goalie, initial_ball)
-        self.goalie = Goalie(initial_goalie, angle2)
-
-        self.entities = [self.player, self.goalie, self.ball]
-        self._update_entity_seeds()
+        self.player = None
+        self.ball = None
+        self.goalie = None
 
         self.states = []
         self.render_states = []
@@ -92,9 +81,12 @@ class GoalEnv(gym.Env):
             )
         ))
         self.observation_space = Compound((
-            spaces.Box(low=0., high=1., shape=self.get_state().shape, dtype=np.float32),
-            spaces.Discrete(200),  # steps (200 limit is an estimate)
+            # spaces.Box(low=0., high=1., shape=self.get_state().shape, dtype=np.float32),  # scaled states
+            spaces.Box(low=LOW_VECTOR, high=HIGH_VECTOR, dtype=np.float32),  # unscaled states
+            spaces.Discrete(200),  # internal time steps (200 limit is an estimate)
         ))
+
+        self.seed()
 
     def step(self, action):
         """
@@ -168,12 +160,15 @@ class GoalEnv(gym.Env):
 
     def reset(self):
         # TODO: implement reset for each entity to avoid creating new objects and reduce duplicate code
-        # create entities (player, ball, goalie)
         initial_player = np.array((0, self.np_random.uniform(-PITCH_WIDTH / 2, PITCH_WIDTH / 2)))
         angle = angle_between(initial_player, np.array((PITCH_LENGTH / 2, 0)))
         self.player = Player(initial_player, angle)
 
-        initial_ball = initial_player + KICKABLE * angle_position(angle)
+        MACHINE_EPSILON = 1e-12  # ensure always kickable on first state
+        # fixes seeded runs changing between machines due to minor precision differences,
+        # specifically from angle_position due to cos and sin approximations
+        initial_ball = initial_player + (KICKABLE - MACHINE_EPSILON) * angle_position(angle)
+        #initial_ball = initial_player + KICKABLE * angle_position(angle)
         self.ball = Ball(initial_ball)
 
         initial_goalie = self._keeper_target(initial_ball)
@@ -192,6 +187,7 @@ class GoalEnv(gym.Env):
 
     def seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
+        self.reset()
         self._update_entity_seeds()
         return [seed]
 
@@ -232,7 +228,26 @@ class GoalEnv(gym.Env):
             [self.goalie.orientation],
             self.ball.position,
             self.ball.velocity))
-        return self.scale_state(state)
+        #return self.scale_state(state)
+        return state
+
+    def _load_from_state(self, state):
+        assert len(state) == len(self.get_state())
+        self.player.position[0] = state[0]
+        self.player.position[1] = state[1]
+        self.player.velocity[0] = state[2]
+        self.player.velocity[1] = state[3]
+        self.player.orientation = state[4]
+        self.goalie.position[0] = state[5]
+        self.goalie.position[1] = state[6]
+        self.goalie.velocity[0] = state[7]
+        self.goalie.velocity[1] = state[8]
+        self.goalie.orientation = state[9]
+        self.ball.position[0] = state[10]
+        self.ball.position[1] = state[11]
+        self.ball.velocity[0] = state[12]
+        self.ball.velocity[1] = state[13]
+
 
     def _perform_action(self, act, parameters, agent):
         """ Applies for selected action for the given agent. """
@@ -252,6 +267,8 @@ class GoalEnv(gym.Env):
             agent.dribble(self.ball, parameters)
         elif act == KICK_TO:
             agent.kick_to(self.ball, parameters[0])
+        else:
+            raise error.InvalidAction("Action not recognised: ", act)
 
     def _resolve_collisions(self):
         """ Shift apart all colliding entities with one pass. """
@@ -445,7 +462,7 @@ class Entity:
         self.size = config['SIZE']
         self.position = np.array([0., 0.])
         self.velocity = np.array([0., 0.])
-        self.np_random = np.random  # overwritten by seed()
+        self.np_random = None  # overwritten by seed()
 
     def update(self):
         """ Update the position and velocity. """
@@ -457,7 +474,7 @@ class Entity:
         rrand = self.np_random.uniform(-self.rand, self.rand)
         theta = (1 + rrand) * theta
         rmax = self.rand * norm(self.velocity)
-        noise = np.array([self.np_random.uniform(-rmax, rmax), self.np_random.uniform(-rmax, rmax)])
+        noise = self.np_random.uniform(-rmax, rmax, size=2)
         rate = float(power) * self.power_rate
         acceleration = rate * angle_position(theta) + noise
         acceleration = bound_vector(acceleration, self.accel_max)

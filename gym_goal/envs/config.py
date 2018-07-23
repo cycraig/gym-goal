@@ -46,3 +46,5 @@ SCALE_VECTOR = np.array([PITCH_LENGTH / 2, PITCH_WIDTH, 2.0, 2.0, 2 * np.pi,
 SHIFT_VECTOR = np.array([0.0, PITCH_WIDTH / 2, 1.0, 1.0, np.pi,
                          0.0, PITCH_WIDTH / 2, 1.0, 1.0, np.pi,
                          0.0, PITCH_WIDTH / 2, 3, 3])
+LOW_VECTOR = -SHIFT_VECTOR
+HIGH_VECTOR = np.array(SCALE_VECTOR-SHIFT_VECTOR)
