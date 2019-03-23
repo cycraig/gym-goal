@@ -1,10 +1,16 @@
+"""
+Robot Soccer Goal domain by Warwick Masson et al. [2016], Reinforcement Learning with Parameterized Actions
+Based on code from https://github.com/WarwickMasson/aaai-goal
+
+Author: C. Bester
+June 2018
+"""
 import numpy as np
 import math
 import gym
 import pygame
 from gym import spaces, error
 from gym.utils import seeding
-from gym_goal.spaces import Compound
 import sys
 from .config import PLAYER_CONFIG, BALL_CONFIG, GOAL_AREA_LENGTH, GOAL_AREA_WIDTH, GOAL_WIDTH, GOAL_DEPTH, KICKABLE, \
     INERTIA_MOMENT, MINPOWER, MAXPOWER, PITCH_LENGTH, PITCH_WIDTH, CATCHABLE, CATCH_PROBABILITY, SHIFT_VECTOR, \
@@ -30,17 +36,15 @@ ACTION_LOOKUP = {
 
 # field bounds seem to be 0, PITCH_LENGTH / 2, -PITCH_WIDTH / 2, PITCH_WIDTH / 2
 PARAMETERS_MIN = [
-    np.array([0, -PITCH_WIDTH / 2]),
-    # np.array([-PITCH_LENGTH, -PITCH_WIDTH]), # just trying larger range...
-    np.array([-GOAL_WIDTH / 2]),
-    np.array([-GOAL_WIDTH / 2]),
+    np.array([0, -PITCH_WIDTH / 2]),  # -15
+    np.array([-GOAL_WIDTH / 2]),  # -7.01
+    np.array([-GOAL_WIDTH / 2]),  # -7.01
 ]
 
 PARAMETERS_MAX = [
-    np.array([PITCH_LENGTH, PITCH_WIDTH / 2]),
-    # np.array([PITCH_LENGTH, PITCH_WIDTH]),  # just trying larger range...
-    np.array([GOAL_WIDTH / 2]),
-    np.array([GOAL_WIDTH / 2]),
+    np.array([PITCH_LENGTH, PITCH_WIDTH / 2]),  # 40, 15
+    np.array([GOAL_WIDTH / 2]),  # 7.01
+    np.array([GOAL_WIDTH / 2]),  # 7.01
 ]
 
 def norm(vec2d):
@@ -74,13 +78,13 @@ class GoalEnv(gym.Env):
         self.max_time = 100
 
         num_actions = len(ACTION_LOOKUP)
-        self.action_space = Compound((
+        self.action_space = spaces.Tuple((
             spaces.Discrete(num_actions),  # actions
-            Compound(  # parameters
+            spaces.Tuple(  # parameters
                 tuple(spaces.Box(PARAMETERS_MIN[i], PARAMETERS_MAX[i], dtype=np.float32) for i in range(num_actions))
             )
         ))
-        self.observation_space = Compound((
+        self.observation_space = spaces.Tuple((
             # spaces.Box(low=0., high=1., shape=self.get_state().shape, dtype=np.float32),  # scaled states
             spaces.Box(low=LOW_VECTOR, high=HIGH_VECTOR, dtype=np.float32),  # unscaled states
             spaces.Discrete(200),  # internal time steps (200 limit is an estimate)
@@ -183,6 +187,14 @@ class GoalEnv(gym.Env):
 
         self.time = 0
 
+        self.states.append([
+            self.player.position.copy(),
+            self.player.orientation,
+            self.goalie.position.copy(),
+            self.goalie.orientation,
+            self.ball.position.copy()])
+        self.render_states.append(self.states[-1])
+
         return self.get_state(), 0
 
     def seed(self, seed=None):
@@ -247,7 +259,6 @@ class GoalEnv(gym.Env):
         self.ball.position[1] = state[11]
         self.ball.velocity[0] = state[12]
         self.ball.velocity[1] = state[13]
-
 
     def _perform_action(self, act, parameters, agent):
         """ Applies for selected action for the given agent. """
@@ -424,19 +435,7 @@ class GoalEnv(gym.Env):
             self.window = None
             return
 
-        # initialise visualiser
-        if self.window is None:
-            pygame.init()
-            length = self.__visualiser_scale(PITCH_LENGTH / 2 + GOAL_DEPTH)
-            width = self.__visualiser_scale(PITCH_WIDTH)
-            self.window = pygame.display.set_mode((length, width))
-            self.__clock = pygame.time.Clock()
-            size = (length, width)
-            self.__background = pygame.Surface(size)
-            self.__white = pygame.Color(255, 255, 255, 0)
-            self.__black = pygame.Color(0, 0, 0, 0)
-            self.__red = pygame.Color(255, 0, 0, 0)
-            self.__background.fill(pygame.Color(0, 125, 0, 0))
+        self._initialse_window()
 
         self.__draw_render_states()
 
@@ -448,6 +447,30 @@ class GoalEnv(gym.Env):
         #    if self.viewer is None:
         #        self.viewer = rendering.SimpleImageViewer(SCREEN_WIDTH, SCREEN_HEIGHT)
         #    self.viewer.imshow(img)
+
+    def _initialse_window(self):
+        # initialise visualiser
+        if self.window is None:
+            pygame.init()
+            width = self.__visualiser_scale(PITCH_LENGTH / 2 + GOAL_DEPTH)
+            height = self.__visualiser_scale(PITCH_WIDTH)
+            self.window = pygame.display.set_mode((width, height))
+            self.__clock = pygame.time.Clock()
+            size = (width, height)
+            self.__background = pygame.Surface(size)
+            self.__white = pygame.Color(255, 255, 255, 0)
+            self.__black = pygame.Color(0, 0, 0, 0)
+            self.__red = pygame.Color(255, 0, 0, 0)
+            self.__background.fill(pygame.Color(0, 125, 0, 0))
+
+    def save_render_states(self, dir, prefix, index=0):
+        self._initialse_window()
+        import os
+        for s in self.render_states:
+            self.__draw_internal_state(s)
+            pygame.image.save(self.window, os.path.join(dir, prefix+"_"+str("{:04d}".format(index))+".jpeg"))
+            index += 1
+        return index
 
 
 class Entity:
