@@ -1,5 +1,7 @@
 # Robot Soccer Goal
 
+![Robot Soccer Goal domain](img/goal_domain.png)
+
 The Robot Soccer Goal environment [[Masson et al. 2016]](https://arxiv.org/abs/1509.01644) uses a parameterised action space and continuous state space. The task involves an agent learning to kick a ball past a keeper. Three actions are available to the agent:
 
 - kick-to(x,y)
@@ -34,7 +36,7 @@ or
 
 ```python
 import gym
-imprt gym_goal
+import gym_goal
 env = gym.make('Goal-v0')
 ```
 
